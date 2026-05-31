@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>SansChannel v3.3.8 «Эпоха Данквиста»</title>
+    <style>
+        body{background:#000;color:#fff;font-family:monospace;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;margin:0;overflow:hidden}
+        #gameCanvas{border:4px solid #fff;background:#000;box-shadow:0 0 35px rgba(255,255,255,0.1)}
+        .info-panel{display:none;gap:15px;margin-bottom:10px;font-size:16px;text-transform:uppercase}
+        #hpLabel{color:red;font-weight:bold}
+        #charaHpLabel{color:#ff0055;font-weight:bold}
+        #achieveBox{position:absolute;top:20px;background:#111;border:3px solid #ffb800;padding:10px 20px;font-size:18px;color:#fff;display:none;box-shadow:0 0 20px rgba(255,184,0,0.3)}
+        .hint-panel{margin-top:10px;font-size:15px;color:#888;display:none;gap:20px}
+    </style>
+</head>
+<body>
+<div id="achieveBox">🏆 АЧИВКА: <span id="achieveText"></span></div>
+<div class="info-panel" id="uiPanel">
+    <div>ТВОЁ ХП: <span id="hpLabel">99</span>/99</div>
+    <div id="phaseText">ФАЗА 1: <span id="charaHpLabel">2200</span></div>
+    <div>ХИЛКИ: <span id="healCountLabel" style="color:#ffb800">8</span> шт</div>
+    <div id="chocUi" style="color:#ff0055;display:none">🍫 ШОКОЛАД: <span id="chocCountLabel">0</span> шт</div>
+    <div id="cdUi" style="color:#00ffff">⚡ АТК: <span id="cdText">ГОТОВ</span></div>
+</div>
+<canvas id="gameCanvas" width="960" height="480"></canvas>
+<div class="hint-panel" id="hintPanel">
+    <div id="hintZ">[Z] - АТАКА (КД 4 СЕК)</div>
+    <div id="hintX">[X] - ПИРОГ (+30 ХП / БЕЗ КД)</div>
+    <div id="hintC" style="color:#ff0055;display:none">[C] - ШОКОЛАДКА (ФУЛЛ ХИЛ)</div>
+</div>
+<div style="margin-top:12px;font-size:16px;color:#666" id="statusLabel">SansChannel v3.3.8 «Эпоха Данквиста»</div>
+
+<script>
+// --------------------------------------------------------------
+//  ФИНАЛЬНАЯ ВЕРСИЯ — ИСПРАВЛЕНА МУЗЫКА, НОЖИ, АУРЫ, ПОДГОНЫ, УРОН
+// --------------------------------------------------------------
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+
+let gameState = 'menu';
+let hp = 99, charaHp = 2200, maxCharaHp = 2200;
+let healsLeft = 8, attackCooldown = 0, phase = 1;
+let isTimingAttack = false, attackLineX = 235, attackLineSpeed = 8;
+let isHardMode = false;
+let knives = [];
+let isKnifeSpawnerRunning = false;
+let winType = "", earnCoins = 0;
+let flashAlpha = 0;
+let healsUsedInPhase3Hard = 0;
+let phase1Heals = 0;
+
+// localStorage
+let coins = parseInt(localStorage.getItem('sc_coins'));
+if (isNaN(coins)) { coins = 0; localStorage.setItem('sc_coins', 0); }
+
+let hasWeapon = localStorage.getItem('sc_wpn') === 'true';
+let hasHeal = localStorage.getItem('sc_hl') === 'true';
+let hasPlush = localStorage.getItem('sc_plsh') === 'true';
+let hasSoul = localStorage.getItem('sc_sl') === 'true';
+let equipWpn = localStorage.getItem('eq_wpn') === 'true';
+let equipHl = localStorage.getItem('eq_hl') === 'true';
+let equipChara = localStorage.getItem('eq_ch') || 'normal';
+let equipSl = localStorage.getItem('eq_sl') === 'true';
+let equipBone = localStorage.getItem('eq_bone') === 'true';
+let charaChocCount = parseInt(localStorage.getItem('sc_choc')) || 0;
+let hardModeBeaten = localStorage.getItem('hm_beaten') === 'true';
+let hasBsodSkin = localStorage.getItem('sc_bsod_skin') === 'true';
+let startTimeStamp = localStorage.getItem('sc_start_time');
+if (!startTimeStamp) {
+    startTimeStamp = Date.now();
+    localStorage.setItem('sc_start_time', startTimeStamp);
+}
+
+let achievements = [];
+for (let i = 1; i <= 25; i++) {
+    achievements.push({ id: i, unlocked: localStorage.getItem('sc_ach_' + i) === 'true' });
+}
+
+function unlockAchievement(id, name) {
+    if (achievements[id-1].unlocked) return;
+    achievements[id-1].unlocked = true;
+    localStorage.setItem('sc_ach_' + id, 'true');
+    const box = document.getElementById("achieveBox");
+    const txt = document.getElementById("achieveText");
+    txt.textContent = name;
+    box.style.display = "block";
+    setTimeout(() => { box.style.display = "none"; }, 3500);
+    checkGlobalAchievements();
+}
+
+function checkGlobalAchievements() {
+    let cnt = achievements.filter(a => a.unlocked).length;
+    if (cnt >= 13) unlockAchievement(23, "50% контента");
+    if (cnt >= 24) unlockAchievement(24, "100% КОНТЕНТА");
+    let timePassed = Date.now() - parseInt(startTimeStamp);
+    if (timePassed <= 7200000 && achievements[20]?.unlocked) unlockAchievement(25, "ДАНКВИСТ");
+}
+
+function applyPhaseHealAdjustment() {
+    if (isHardMode) {
+        if (phase === 1) healsLeft = 15;
+        else if (phase === 2) healsLeft = 42;
+        else if (phase === 3) healsLeft = 32;
+    } else {
+        if (phase === 1) healsLeft = 8;
+        else if (phase === 2) healsLeft = 52;
+        else if (phase === 3) healsLeft = 42;
+    }
+    document.getElementById("healCountLabel").textContent = healsLeft;
+    console.log(`Подгон: ${healsLeft} хилок, фаза ${phase}, ${isHardMode ? "Hard" : "Normal"}`);
+}
+
+function getDamageTaken() {
+    if (phase === 3 && isHardMode) return 10;
+    if (phase === 2 && isHardMode) return 4;
+    if (phase === 1 && isHardMode) return 6;
+    if (phase === 2) return 2;
+    return 4; // фаза 1 Normal или фаза 3 Normal
+}
+
+function resetGame() {
+    hp = equipSl ? 110 : 99;
+    applyPhaseHealAdjustment();
+    if (phase === 3 && isHardMode) healsUsedInPhase3Hard = 0;
+    knives = [];
+    isKnifeSpawnerRunning = false;
+    attackCooldown = 0;
+    flashAlpha = 0;
+    document.getElementById("uiPanel").style.display = "flex";
+    document.getElementById("hintPanel").style.display = "flex";
+    document.getElementById("hpLabel").textContent = hp;
+    document.getElementById("charaHpLabel").textContent = charaHp;
+    document.getElementById("healCountLabel").textContent = healsLeft;
+    document.getElementById("chocCountLabel").textContent = charaChocCount;
+    if(charaChocCount > 0) {
+        document.getElementById("chocUi").style.display = "block";
+        document.getElementById("hintC").style.display = "block";
+    }
+}
+
+// Диалоги
+let dialogueText = "", dialogueCallback = null;
+
+function startPhase1Dialogue() {
+    dialogueText = "Чара: Привет, SansChannel... Твой таймлайн стёрт.";
+    dialogueCallback = () => { gameState = 'battle'; startKnifeSpawner(); };
+}
+function startHardDialogue() {
+    dialogueText = "Чара: ХАРДМОД? Твои 75 миллисекунд станут твоим концом!";
+    dialogueCallback = () => { gameState = 'battle'; startKnifeSpawner(); };
+}
+function startPhase2Dialogue() {
+    dialogueText = "Чара: ЧТО?! Как ты выжил?! Включаю пулемёт ножей!";
+    dialogueCallback = () => { gameState = 'battle'; startKnifeSpawner(); };
+}
+function startPhase3Dialogue() {
+    dialogueText = "Чара: ...but it refused.";
+    dialogueCallback = () => {
+        unlockAchievement(16, "игра продолжается=)");
+        gameState = 'battle';
+        startKnifeSpawner();
+    };
+}
+function startHardPhase3Dialogue() {
+    dialogueText = "Чара: Я НЕ СДАМСЯ КАК В ПРОШЛЫЙ РАЗ!!!";
+    dialogueCallback = () => {
+        unlockAchievement(17, "ещё немного=)");
+        gameState = 'battle';
+        startKnifeSpawner();
+    };
+}
+
+// Управление
+window.addEventListener("keydown", function(e) {
+    let code = e.code;
+    keys[code.toLowerCase()] = true;
+    if (gameState === 'battle') {
+        if (code === 'KeyX' && healsLeft > 0) {
+            healsLeft--;
+            let healAmount = equipHl ? 50 : 30;
+            hp = Math.min((equipSl ? 110 : 99), hp + healAmount);
+            if (phase === 3 && isHardMode) healsUsedInPhase3Hard++;
+            if (phase === 1) phase1Heals++;
+            document.getElementById("statusLabel").textContent = equipHl ? "🥤 КОЛА ЭВЕРВЕСС! +50 ХП" : "🥧 ПИРОГ ТОРИЭЛЬ! +30 ХП";
+            document.getElementById("hpLabel").textContent = hp;
+            document.getElementById("healCountLabel").textContent = healsLeft;
+            if (phase === 3 && isHardMode && healsUsedInPhase3Hard === 100) {
+                unlockAchievement(8, "смерть от диабета");
+                hp = 0;
+                document.getElementById("hpLabel").textContent = hp;
+                gameState = 'gameover';
+                isKnifeSpawnerRunning = false;
+                bgMusic.pause();
+                bgMusic.currentTime = 0;
+            }
+        }
+        if (code === 'KeyC' && charaChocCount > 0) {
+            charaChocCount--;
+            localStorage.setItem('sc_choc', charaChocCount);
+            hp = equipSl ? 110 : 99;
+            document.getElementById("statusLabel").textContent = "🍫 ШОКОЛАДКА ЧАРЫ! ПОЛНЫЙ ХИЛ!";
+            document.getElementById("hpLabel").textContent = hp;
+            document.getElementById("chocCountLabel").textContent = charaChocCount;
+            if(charaChocCount <= 0) {
+                document.getElementById("chocUi").style.display = "none";
+                document.getElementById("hintC").style.display = "none";
+            }
+        }
+    }
+});
+window.addEventListener("keyup", function(e) { keys[e.code.toLowerCase()] = false; });
+let keys = {};
+
+let attackCdFrames = 0;
+function handleBattleInput() {
+    if (attackCdFrames > 0) {
+        attackCdFrames--;
+        let secLeft = Math.ceil(attackCdFrames / 60);
+        document.getElementById("cdText").textContent = `ЖДИ (${secLeft} сек)`;
+        document.getElementById("cdText").style.color = "red";
+    } else {
+        document.getElementById("cdText").textContent = "ГОТОВ";
+        document.getElementById("cdText").style.color = "#00ffff";
+    }
+    if (keys['keyz'] && attackCdFrames <= 0 && gameState === 'battle') {
+        keys['keyz'] = false;
+        if (!isTimingAttack) {
+            isTimingAttack = true;
+            attackLineX = 235;
+        } else {
+            isTimingAttack = false;
+            attackCdFrames = 240;
+            let baseDmg = equipWpn ? 150 : 40;
+            if (equipBone) baseDmg += 100;
+            let damage = baseDmg;
+            let isCrit = (attackLineX >= 650 && attackLineX <= 685);
+            if (isCrit) damage = baseDmg * 2;
+            charaHp -= damage;
+            if (charaHp < 0) charaHp = 0;
+            document.getElementById("charaHpLabel").textContent = charaHp;
+            document.getElementById("statusLabel").textContent = isCrit ? "🎯 КРИТ! УДАР В ТОЧКУ!" : "Обычный удар...";
+            if (hp <= 10 && !achievements[5]?.unlocked) unlockAchievement(6, "НА ВОЛОСКЕ");
+            checkPhaseProgression();
+        }
+    }
+}
+
+function spawnKnifeLoop() {
+    if (!isKnifeSpawnerRunning || gameState !== 'battle') return;
+    let kw = 48, kh = 22;
+    let speed = (isHardMode ? 9 : 6) + (phase === 3 ? 2 : 0);
+    let startX = Math.random() < 0.5 ? 235 - kw : 235 + 490;
+    let startY = 160 + Math.random() * (260 - kh);
+    let dir = startX < 235 ? 1 : -1;
+    knives.push({x: startX, y: startY, w: kw, h: kh, vx: dir * speed});
+    if (phase === 3 && Math.random() < 0.04 && !flashTriggeredInPhase3) {
+        flashAlpha = 1.0;
+        unlockAchievement(18, "АААА МОИ ГЛАЗА");
+        flashTriggeredInPhase3 = true;
+    }
+    let delay = isHardMode ? (phase === 3 ? 65 : 75) : (phase === 3 ? 120 : 160);
+    setTimeout(spawnKnifeLoop, delay);
+}
+
+function startKnifeSpawner() {
+    if (!isKnifeSpawnerRunning) {
+        isKnifeSpawnerRunning = true;
+        spawnKnifeLoop();
+    }
+}
+
+let flashTriggeredInPhase3 = false;
+
+function updateGameLogic() {
+    if (gameState !== 'battle') return;
+    handleBattleInput();
+    let step = 5;
+    if (keys['arrowleft'] || keys['keya']) soul.x = Math.max(235, soul.x - step);
+    if (keys['arrowright'] || keys['keyd']) soul.x = Math.min(235 + 490 - soul.size, soul.x + step);
+    if (keys['arrowup'] || keys['keyw']) soul.y = Math.max(160, soul.y - step);
+    if (keys['arrowdown'] || keys['keys']) soul.y = Math.min(160 + 260 - soul.size, soul.y + step);
+    if (isTimingAttack) {
+        attackLineX += attackLineSpeed;
+        if (attackLineX > 235 + 490) {
+            isTimingAttack = false;
+            attackCdFrames = 240;
+        }
+    }
+    for (let i = knives.length-1; i >= 0; i--) {
+        let k = knives[i];
+        k.x += k.vx;
+        if (soul.x < k.x + k.w && soul.x + soul.size > k.x && soul.y < k.y + k.h && soul.y + soul.size > k.y) {
+            let damageTaken = getDamageTaken();
+            hp -= damageTaken;
+            if (hp < 0) hp = 0;
+            document.getElementById("hpLabel").textContent = hp;
+            dmgSound.play();
+            knives.splice(i,1);
+            if (hp <= 0) {
+                gameState = 'gameover';
+                isKnifeSpawnerRunning = false;
+                bgMusic.pause();
+                bgMusic.currentTime = 0;
+                return;
+            }
+        } else if (k.x < 100 || k.x > 900) {
+            knives.splice(i,1);
+        }
+    }
+    if (flashAlpha > 0) {
+        flashAlpha -= 0.004;
+        if (flashAlpha < 0) flashAlpha = 0;
+    }
+}
+
+function checkPhaseProgression() {
+    if (charaHp > 0) return;
+    if (phase === 1) {
+        phase = 2;
+        charaHp = 3500;
+        maxCharaHp = 3500;
+        gameState = 'dialogue';
+        startPhase2Dialogue();
+    } else if (phase === 2) {
+        if (isHardMode) {
+            hardModeBeaten = true;
+            localStorage.setItem('hm_beaten', 'true');
+            localStorage.setItem('sc_win_hard_camp', 'true');
+        } else {
+            localStorage.setItem('sc_win_norm_camp', 'true');
+        }
+        if (Math.random() < (isHardMode ? 0.10 : 0.05)) {
+            charaChocCount++;
+            localStorage.setItem('sc_choc', charaChocCount);
+            unlockAchievement(19, "ЭТА ШАКАЛАД");
+        }
+        phase = 3;
+        if (isHardMode) {
+            healsLeft = 100;
+            healsUsedInPhase3Hard = 0;
+        }
+        startSelectedPhase();
+    } else if (phase === 3) {
+        isKnifeSpawnerRunning = false;
+        winType = isHardMode ? "HARD" : "NORMAL";
+        bgMusic.pause();
+        bgMusic.currentTime = 0;
+        let baseReward = isHardMode ? 60 : 30;
+        let casinoChance = isHardMode ? 0.15 : 0.20;
+        let isJackpot = Math.random() < casinoChance;
+        earnCoins = baseReward;
+        if (isJackpot) {
+            earnCoins = baseReward * 2;
+            unlockAchievement(isHardMode ? 13 : 12, isHardMode ? "ХАРДКОРНЫЙ ЛУДОМАН" : "ЛУДОМАН");
+        }
+        coins += earnCoins;
+        localStorage.setItem('sc_coins', coins);
+        if (isHardMode) {
+            localStorage.setItem('sc_win_hard_f3', 'true');
+            if (localStorage.getItem('sc_win_norm_f3') === 'true') {
+                unlockAchievement(20, "она сдохла!=)");
+            }
+        } else {
+            localStorage.setItem('sc_win_norm_f3', 'true');
+            unlockAchievement(1, "ТРУ ГЕНОЦИД");
+        }
+        gameState = 'win';
+    }
+}
+
+// Аудио и изображения
+const bgMusic = new Audio("music.mp3");
+bgMusic.loop = true;
+const dmgSound = new Audio("damage.mp3");
+const charaImg = new Image(); charaImg.src = "chara.jpg";
+const coinImg = new Image(); coinImg.src = "coin.png";
+const plushImg = new Image(); plushImg.src = "plush.jpg";
+const sansImg = new Image(); sansImg.src = "sans.png";
+const knifeImg = new Image(); knifeImg.src = "knife.png";
+const soulImg = new Image(); soulImg.src = "soul.png";
+const bsodImg = new Image(); bsodImg.src = "bsod.png";
+
+let soul = {x: 235 + 490/2 - 15, y: 160 + 260/2 - 15, size: 30, speed: 5};
+
+// Кнопки
+const startBtn = {x: 960/2-120, y: 130, w: 240, h: 42};
+const achBtn = {x: 960/2-120, y: 185, w: 240, h: 42};
+const shopBtn = {x: 960/2-120, y: 240, w: 240, h: 42};
+const hardBtn = {x: 960/2-120, y: 295, w: 240, h: 42};
+const phaseSelectBtn = {x: 960/2-120, y: 350, w: 240, h: 42};
+const backBtn = {x: 40, y: 30, w: 140, h: 45};
+const menuBtn = {x: 960/2-80, y: 360, w: 160, h: 45};
+const diagBtn = {x: 960/2-100, y: 280, w: 200, h: 45};
+const toggleModeBtn = {x: 960/2-110, y: 310, w: 220, h: 45};
+const pBtn1 = {x: 180, y: 220, w: 160, h: 50};
+const pBtn2 = {x: 400, y: 220, w: 160, h: 50};
+const pBtn3 = {x: 620, y: 220, w: 160, h: 50};
+
+let phaseMenuMode = 'normal';
+let totalAchievementsCount = 25;
+
+const achNames = {
+    1: "ТРУ ГЕНОЦИД", 2: "ОБЖОРА", 3: "СТЁР МИР", 4: "ЧИТЕР С КОЛДЫ",
+    5: "СЕКРЕТНОЕ СЛОВО", 6: "НА ВОЛОСКЕ", 7: "ВЕГАН", 8: "смерть от диабета",
+    9: "НАЧАЛО ХАРД МОДА", 10: "ЭТО СЛОЖНЕЕ ЧЕМ Я ДУМАЛ", 11: "РАЗОБЛАЧИТЕЛЬ МАЛОЛЕТОК",
+    12: "ЛУДОМАН", 13: "ХАРДКОРНЫЙ ЛУДОМАН", 14: "СИЛА РАДУГИ", 15: "ЧИТЫ — ЭТО ПЛОХО",
+    16: "игра продолжается=)", 17: "ещё немного=)", 18: "АААА МОИ ГЛАЗА", 19: "ЭТА ШАКАЛАД",
+    20: "она сдохла!=)", 21: "было просто=)", 22: "главный спонсор санса", 23: "50% контента",
+    24: "100% КОНТЕНТА", 25: "ДАНКВИСТ"
+};
+
+// Секретные слова
+let secretInput = "";
+function checkSecretWord(e) {
+    if (gameState !== 'menu' && gameState !== 'achievements') return;
+    secretInput += e.key.toLowerCase();
+    if (secretInput.endsWith("sanschannel")) { unlockAchievement(5, "СЕКРЕТНОЕ СЛОВО"); secretInput = ""; }
+    else if (secretInput.endsWith("chicken")) { unlockAchievement(11, "РАЗОБЛАЧИТЕЛЬ МАЛОЛЕТОК"); secretInput = ""; }
+    else if (secretInput.endsWith("svcheats1")) { unlockAchievement(15, "ЧИТЫ — ЭТО ПЛОХО"); coins += 100; localStorage.setItem('sc_coins', coins); secretInput = ""; }
+    else if (secretInput.endsWith("aimbot")) { gameState = 'bsod_screen'; hasBsodSkin = true; localStorage.setItem('sc_bsod_skin', 'true'); unlockAchievement(4, "ЧИТЕР С КОЛДЫ"); secretInput = ""; }
+}
+window.addEventListener("keydown", checkSecretWord);
+
+function startSelectedPhase() {
+    isHardMode = (phaseMenuMode === 'hard');
+    if (phase === 1) { charaHp = 2200; maxCharaHp = 2200; }
+    else if (phase === 2) { charaHp = 3500; maxCharaHp = 3500; }
+    else if (phase === 3) { charaHp = isHardMode ? 4500 : 5000; maxCharaHp = charaHp; }
+    resetGame();
+    bgMusic.play().catch(()=>{});
+    if (phase === 1) { gameState = 'dialogue'; if(isHardMode) startHardDialogue(); else startPhase1Dialogue(); }
+    else if (phase === 2) { gameState = 'battle'; startKnifeSpawner(); }
+    else if (phase === 3) { gameState = 'dialogue'; if(isHardMode) startHardPhase3Dialogue(); else startPhase3Dialogue(); }
+}
+
+// Обработка кликов
+canvas.addEventListener("click", function(e) {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    
+    if (gameState === 'menu') {
+        if (mx >= startBtn.x && mx <= startBtn.x+startBtn.w && my >= startBtn.y && my <= startBtn.y+startBtn.h) {
+            isHardMode = false; phase = 1; charaHp = 2200; maxCharaHp = 2200; resetGame(); gameState = 'dialogue'; startPhase1Dialogue();
+        } else if (mx >= hardBtn.x && mx <= hardBtn.x+hardBtn.w && my >= hardBtn.y && my <= hardBtn.y+hardBtn.h) {
+            isHardMode = true; phase = 1; charaHp = 2200; maxCharaHp = 2200; resetGame(); unlockAchievement(9, "НАЧАЛО ХАРД МОДА"); gameState = 'dialogue'; startHardDialogue();
+        } else if (mx >= achBtn.x && mx <= achBtn.x+achBtn.w && my >= achBtn.y && my <= achBtn.y+achBtn.h) {
+            gameState = 'achievements';
+        } else if (mx >= shopBtn.x && mx <= shopBtn.x+shopBtn.w && my >= shopBtn.y && my <= shopBtn.y+shopBtn.h) {
+            gameState = 'shop';
+        } else if (mx >= phaseSelectBtn.x && mx <= phaseSelectBtn.x+phaseSelectBtn.w && my >= phaseSelectBtn.y && my <= phaseSelectBtn.y+phaseSelectBtn.h) {
+            let hasAll = true; for(let i=1; i<=13; i++) if(!achievements[i-1].unlocked) hasAll = false;
+            if(hardModeBeaten || hasAll) gameState = 'phase_select';
+        }
+    } else if (gameState === 'achievements') {
+        if (mx >= backBtn.x && mx <= backBtn.x+backBtn.w && my >= backBtn.y && my <= backBtn.y+backBtn.h) gameState = 'menu';
+    } else if (gameState === 'shop') {
+        if (mx >= backBtn.x && mx <= backBtn.x+backBtn.w && my >= backBtn.y && my <= backBtn.y+backBtn.h) gameState = 'menu';
+        if (mx >= 780 && mx <= 940 && my >= 10 && my <= 170) {
+            equipBone = !equipBone;
+            localStorage.setItem('eq_bone', equipBone ? 'true' : 'false');
+            dmgSound.play();
+            let owned = 0;
+            if (hasWeapon) owned++; if (hasHeal) owned++; if (hasPlush) owned++; if (hasSoul) owned++;
+            if (equipBone) owned++; if (hasBsodSkin) owned++;
+            if (owned >= 6) unlockAchievement(22, "главный спонсор санса");
+        }
+        let shopItems = [
+            {id:1, price:75, bought:hasWeapon, equip:equipWpn},
+            {id:2, price:45, bought:hasHeal, equip:equipHl},
+            {id:3, price:120, bought:hasPlush, equip:equipChara==='plush'},
+            {id:4, price:450, bought:hasSoul, equip:equipSl}
+        ];
+        for (let i=0; i<shopItems.length; i++) {
+            let it = shopItems[i];
+            let iy = 100 + i*55;
+            if (mx >= 40 && mx <= 200 && my >= iy && my <= iy+35) {
+                if (it.id === 4 && localStorage.getItem('sc_win_norm_f3') !== 'true') { dmgSound.play(); return; }
+                if (!it.bought && coins >= it.price) {
+                    coins -= it.price;
+                    localStorage.setItem('sc_coins', coins);
+                    if (it.id === 1) { hasWeapon = true; localStorage.setItem('sc_wpn', 'true'); }
+                    if (it.id === 2) { hasHeal = true; localStorage.setItem('sc_hl', 'true'); }
+                    if (it.id === 3) { hasPlush = true; localStorage.setItem('sc_plsh', 'true'); }
+                    if (it.id === 4) { hasSoul = true; localStorage.setItem('sc_sl', 'true'); unlockAchievement(14, "СИЛА РАДУГИ"); }
+                } else if (it.bought) {
+                    if (it.id === 1) { equipWpn = !equipWpn; localStorage.setItem('eq_wpn', equipWpn ? 'true' : 'false'); }
+                    if (it.id === 2) { equipHl = !equipHl; localStorage.setItem('eq_hl', equipHl ? 'true' : 'false'); }
+                    if (it.id === 3) { equipChara = (equipChara === 'plush' ? 'normal' : 'plush'); localStorage.setItem('eq_ch', equipChara); }
+                    if (it.id === 4) { equipSl = !equipSl; localStorage.setItem('eq_sl', equipSl ? 'true' : 'false'); }
+                }
+                break;
+            }
+        }
+    } else if (gameState === 'phase_select') {
+        if (mx >= backBtn.x && mx <= backBtn.x+backBtn.w && my >= backBtn.y && my <= backBtn.y+backBtn.h) gameState = 'menu';
+        else if (mx >= pBtn1.x && mx <= pBtn1.x+pBtn1.w && my >= pBtn1.y && my <= pBtn1.y+pBtn1.h) { phase = 1; startSelectedPhase(); }
+        else if (mx >= pBtn2.x && mx <= pBtn2.x+pBtn2.w && my >= pBtn2.y && my <= pBtn2.y+pBtn2.h) { phase = 2; startSelectedPhase(); }
+        else if (mx >= pBtn3.x && mx <= pBtn3.x+pBtn3.w && my >= pBtn3.y && my <= pBtn3.y+pBtn3.h) {
+            if (phaseMenuMode === 'hard' && localStorage.getItem('sc_win_norm_f3') !== 'true') { dmgSound.play(); return; }
+            phase = 3; startSelectedPhase();
+        } else if (mx >= toggleModeBtn.x && mx <= toggleModeBtn.x+toggleModeBtn.w && my >= toggleModeBtn.y && my <= toggleModeBtn.y+toggleModeBtn.h) {
+            phaseMenuMode = (phaseMenuMode === 'normal' ? 'hard' : 'normal');
+        }
+    } else if (gameState === 'dialogue') {
+        if (mx >= diagBtn.x && mx <= diagBtn.x+diagBtn.w && my >= diagBtn.y && my <= diagBtn.y+diagBtn.h) {
+            if(dialogueCallback) dialogueCallback();
+        }
+        if (mx >= backBtn.x && mx <= backBtn.x+backBtn.w && my >= backBtn.y && my <= backBtn.y+backBtn.h) gameState = 'menu';
+    } else if (gameState === 'gameover' || gameState === 'win') {
+        if (mx >= menuBtn.x && mx <= menuBtn.x+menuBtn.w && my >= menuBtn.y && my <= menuBtn.y+menuBtn.h) {
+            gameState = 'menu';
+            document.getElementById("uiPanel").style.display = "none";
+            document.getElementById("hintPanel").style.display = "none";
+        }
+    } else if (gameState === 'bsod_screen') {
+        if (mx >= diagBtn.x && mx <= diagBtn.x+diagBtn.w && my >= diagBtn.y && my <= diagBtn.y+diagBtn.h) {
+            gameState = 'menu';
+            document.getElementById("statusLabel").textContent = "ЧИТЫ ОТКЛЮЧЕНЫ! РАЗБЛОКИРОВАН СКИН БСОД-ЧАРЫ! 💙";
+        }
+    }
+});
+
+let rainbowHue = 0;
+function drawGame() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (gameState === 'menu') {
+        ctx.fillStyle = "#fff"; ctx.font = "28px monospace"; ctx.fillText("SANSCHANNEL: ULTIMATE CHARA FIGHT", 220, 70);
+        let btns = [{b: startBtn, t: "START GAME"},{b: achBtn, t: "ACHIEVEMENTS"},{b: shopBtn, t: "EQUIPMENT SHOP"},{b: hardBtn, t: "HARD MODE"}];
+        btns.forEach(item => { ctx.strokeStyle = "#fff"; ctx.lineWidth = 2; ctx.strokeRect(item.b.x, item.b.y, item.b.w, item.b.h); ctx.fillStyle = "#fff"; ctx.font = "18px monospace"; ctx.fillText(item.t, item.b.x+35, item.b.y+26); });
+        let hasAll = true; for(let i=1;i<=13;i++) if(!achievements[i-1].unlocked) hasAll=false;
+        if (hardModeBeaten || hasAll) { ctx.strokeStyle="#ffb800"; ctx.strokeRect(phaseSelectBtn.x,phaseSelectBtn.y,phaseSelectBtn.w,phaseSelectBtn.h); ctx.fillStyle="#ffb800"; ctx.fillText("🔥 ВЫБОР ФАЗ 🔥", phaseSelectBtn.x+45,phaseSelectBtn.y+26); }
+        else { ctx.strokeStyle="#444"; ctx.strokeRect(phaseSelectBtn.x,phaseSelectBtn.y,phaseSelectBtn.w,phaseSelectBtn.h); ctx.fillStyle="#444"; ctx.fillText("[ЗАБЛОКИРОВАНО]", phaseSelectBtn.x+50,phaseSelectBtn.y+26); }
+    } else if (gameState === 'achievements') {
+        ctx.fillStyle = "#ffb800"; ctx.font = "24px monospace"; ctx.fillText("🏆 СПИСОК ДОСТИЖЕНИЙ (25 ТРОФЕЕВ) 🏆", 240, 45);
+        for (let i=0; i<25; i++) { let col = i%2===0?60:500; let row = 85+Math.floor(i/2)*30; ctx.fillStyle = achievements[i].unlocked ? "#00ff33" : "#444"; ctx.font = "13px monospace"; ctx.fillText((i+1)+". "+achNames[i+1]+(achievements[i].unlocked?" [ВЫБИТО]":" [ЗАКРЫТО]"), col, row); }
+        ctx.strokeStyle="#fff"; ctx.strokeRect(backBtn.x,backBtn.y,backBtn.w,backBtn.h); ctx.fillStyle="#fff"; ctx.fillText("НАЗАД", backBtn.x+45,backBtn.y+28);
+    } else if (gameState === 'shop') {
+        ctx.fillStyle="#fff"; ctx.font="24px monospace"; ctx.fillText("СНАРЯЖЕНИЕ У ПЛЮШЕВОГО САНСА", 240, 50); ctx.fillStyle="#ffb800"; ctx.fillText("БАЛАНС: "+coins, 40, 360);
+        ctx.drawImage(sansImg, 780, 10, 160, 160);
+        if(equipBone) { ctx.fillStyle="#ffb800"; ctx.font="14px monospace"; ctx.fillText("🦴 НАДЕТА КОСТЬ САНСА (+100 УРОН)", 520, 360); }
+        let shopItems = [
+            {id:1,name:"Нож Чары (+50 урона)",price:75,bought:hasWeapon,equip:equipWpn},
+            {id:2,name:"Кола Эвервесс (+50 ХП)",price:45,bought:hasHeal,equip:equipHl},
+            {id:3,name:"Скин Плюш Чара",price:120,bought:hasPlush,equip:equipChara==='plush'},
+            {id:4,name:"Артефакт \"Радужная аура\"",price:450,bought:hasSoul,equip:equipSl}
+        ];
+        for (let i=0;i<shopItems.length;i++) {
+            let it=shopItems[i]; let iy=100+i*55; ctx.strokeStyle="#fff"; ctx.strokeRect(40,iy,160,35);
+            let locked = (it.id===4 && localStorage.getItem('sc_win_norm_f3')!=='true');
+            if(locked) { ctx.fillStyle="#444"; ctx.font="12px monospace"; ctx.fillText("[ЗАБЛОКИРОВАНО]", 55, iy+22); }
+            else { ctx.fillStyle=it.bought?"#ffb800":"#00ff33"; ctx.font="14px monospace"; ctx.fillText(it.bought?"ВЫБРАТЬ":"КУПИТЬ", 90, iy+22); }
+            ctx.fillStyle="#fff"; let statusText = it.name;
+            if(it.id===1 && equipWpn) statusText="НАДЕТО: Нож Чары (+50 урон)";
+            if(it.id===2 && equipHl) statusText="НАДЕТО: Кола Эвервесс (+50 ХП)";
+            if(it.id===3 && equipChara==='plush') statusText="НАДЕТО: Скин Плюш Чара";
+            if(it.id===4 && equipSl) statusText="НАДЕТО: Радужная аура (110 ХП)";
+            if(equipChara==='bsod') statusText="НАДЕТО: Скин БСОД-Чара";
+            ctx.fillText(statusText+" (Цена: "+it.price+")", 220, iy+22);
+        }
+        ctx.drawImage(coinImg, 875, 338, 28, 28);
+        ctx.strokeStyle="#fff"; ctx.strokeRect(backBtn.x,backBtn.y,backBtn.w,backBtn.h); ctx.fillStyle="#fff"; ctx.font="16px monospace"; ctx.fillText("НАЗАД", backBtn.x+45,backBtn.y+28);
+    } else if (gameState === 'phase_select') {
+        ctx.fillStyle="#ffb800"; ctx.font="26px monospace"; ctx.fillText("⚡ АДМИН-ХАБ: ВЫБОР ФАЗ ⚡", 300, 70);
+        ctx.strokeStyle="#fff"; ctx.strokeRect(pBtn1.x,pBtn1.y,pBtn1.w,pBtn1.h); ctx.fillStyle="#fff"; ctx.font="20px monospace"; ctx.fillText("ФАЗА 1", pBtn1.x+40,pBtn1.y+32);
+        ctx.strokeRect(pBtn2.x,pBtn2.y,pBtn2.w,pBtn2.h); ctx.fillText("ФАЗА 2", pBtn2.x+40,pBtn2.y+32);
+        let hardLock = (phaseMenuMode==='hard' && localStorage.getItem('sc_win_norm_f3')!=='true');
+        if(hardLock) { ctx.strokeStyle="#444"; ctx.strokeRect(pBtn3.x,pBtn3.y,pBtn3.w,pBtn3.h); ctx.fillStyle="#444"; ctx.font="12px monospace"; ctx.fillText("[ТРЕБУЕТСЯ НОРМАЛ]", pBtn3.x+15,pBtn3.y+30); }
+        else { ctx.strokeStyle="#fff"; ctx.strokeRect(pBtn3.x,pBtn3.y,pBtn3.w,pBtn3.h); ctx.fillStyle="#fff"; ctx.font="20px monospace"; ctx.fillText("ФАЗА 3", pBtn3.x+40,pBtn3.y+32); }
+        ctx.strokeStyle=phaseMenuMode==='hard'?"red":"green"; ctx.strokeRect(toggleModeBtn.x,toggleModeBtn.y,toggleModeBtn.w,toggleModeBtn.h);
+        ctx.fillStyle=phaseMenuMode==='hard'?"red":"green"; ctx.fillText("РЕЖИМ: "+phaseMenuMode.toUpperCase(), toggleModeBtn.x+40,toggleModeBtn.y+28);
+        ctx.strokeStyle="#fff"; ctx.strokeRect(backBtn.x,backBtn.y,backBtn.w,backBtn.h); ctx.fillStyle="#fff"; ctx.fillText("НАЗАД", backBtn.x+45,backBtn.y+28);
+    } else if (gameState === 'battle') {
+        ctx.strokeStyle="#fff"; ctx.lineWidth=4; ctx.strokeRect(235,160,490,260);
+        ctx.fillStyle="rgba(255,0,0,0.4)"; ctx.fillRect(650,160,35,260);
+        ctx.strokeStyle="red"; ctx.lineWidth=2; ctx.strokeRect(650,160,35,260);
+        if (phase === 3) {
+            rainbowHue = (rainbowHue + 5) % 360;
+            ctx.shadowColor = `hsl(${rainbowHue}, 100%, 70%)`;
+            ctx.shadowBlur = 50;
+        } else if (isHardMode && phase === 1) {
+            ctx.shadowColor = "red";
+            ctx.shadowBlur = 25;
+        }
+        if (equipChara === 'plush') ctx.drawImage(plushImg, 960/2 - 60, 20, 120, 120);
+        else if (equipChara === 'bsod') ctx.drawImage(bsodImg, 960/2 - 60, 20, 120, 120);
+        else ctx.drawImage(charaImg, 960/2 - 60, 20, 120, 120);
+        ctx.shadowBlur = 0;
+        ctx.shadowColor = "transparent";
+        knives.forEach(k => { ctx.drawImage(knifeImg, k.x, k.y, k.w, k.h); });
+        if (equipSl) {
+            ctx.save();
+            rainbowHue = (rainbowHue + 5) % 360;
+            ctx.shadowColor = `hsl(${rainbowHue}, 100%, 70%)`;
+            ctx.shadowBlur = 30;
+            ctx.drawImage(soulImg, soul.x, soul.y, soul.size, soul.size);
+            ctx.restore();
+        } else {
+            ctx.drawImage(soulImg, soul.x, soul.y, soul.size, soul.size);
+        }
+        if (isTimingAttack) { ctx.fillStyle = "#ffffff"; ctx.fillRect(attackLineX, 160, 6, 260); }
+        if (flashAlpha > 0) { ctx.fillStyle = `rgba(255, 255, 255, ${flashAlpha})`; ctx.fillRect(235, 160, 490, 260); }
+    } else if (gameState === 'win') {
+        ctx.strokeStyle="#fff"; ctx.lineWidth=4; ctx.strokeRect(235,160,490,260);
+        if(winType==="HARD") { ctx.fillStyle="#00ffff"; ctx.font="bold 15px monospace"; ctx.fillText("ХАРДКОРНЫЙ ВЫИГРЫШ В КАЗИКЕ!!! (+"+earnCoins+" Крипто-Шекелей)", 245,210);
+        ctx.fillStyle="#888"; ctx.font="14px monospace"; ctx.fillText("В ЭТОМ МИРЕ НИКОГО НЕ ОСТАЛОСЬ...", 340,250);
+        ctx.fillStyle="#ffb800"; ctx.font="14px monospace"; ctx.fillText("🏆 АЧИВКА: \"полная решимость=)\"", 340,340); }
+        else { ctx.fillStyle="#00ff33"; ctx.font="24px monospace"; ctx.fillText("ЭТО ПОБЕДА! (нормал тройка разнесена!)", 250,210);
+        ctx.fillStyle="#fff"; ctx.font="16px monospace"; ctx.fillText("Заработано Крипто-Шекелей: +"+earnCoins, 340,250); }
+        ctx.strokeStyle="#fff"; ctx.lineWidth=2; ctx.strokeRect(menuBtn.x,menuBtn.y,menuBtn.w,menuBtn.h);
+        ctx.fillStyle="#fff"; ctx.font="18px monospace"; ctx.fillText("В МЕНЮ", menuBtn.x+50,menuBtn.y+28);
+    } else if (gameState === 'gameover') {
+        ctx.fillStyle="red"; ctx.font="36px monospace"; ctx.fillText("ТЫ ПОГИБ", 960/2-90,180);
+        ctx.strokeStyle="#fff"; ctx.strokeRect(menuBtn.x,menuBtn.y,menuBtn.w,menuBtn.h);
+        ctx.fillStyle="#fff"; ctx.font="18px monospace"; ctx.fillText("В МЕНЮ", menuBtn.x+50,menuBtn.y+28);
+    } else if (gameState === 'bsod_screen') {
+        ctx.fillStyle="#0000aa"; ctx.fillRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle="#fff"; ctx.font="20px monospace";
+        ctx.fillText("╔════════════════════════════════════════╗", 180,200);
+        ctx.fillText("║   AIMBOT ОБНАРУЖЕН! СИСТЕМА ЗАБЛОКИРОВАНА   ║", 180,240);
+        ctx.fillText("║   ВЫ ПОЛУЧИЛИ СКИН БСОД-ЧАРЫ ЗА ЧИТЫ    ║", 180,280);
+        ctx.fillText("╚════════════════════════════════════════╝", 180,320);
+        ctx.strokeStyle="#fff"; ctx.strokeRect(diagBtn.x,diagBtn.y,diagBtn.w,diagBtn.h);
+        ctx.fillText("В МЕНЮ", diagBtn.x+70,diagBtn.y+28);
+    } else if (gameState === 'dialogue') {
+        ctx.strokeStyle="#fff"; ctx.lineWidth=2; ctx.strokeRect(80,140,800,120);
+        ctx.fillStyle="#fff"; ctx.font="18px monospace"; ctx.fillText(dialogueText, 100,190);
+        ctx.strokeStyle="#fff"; ctx.strokeRect(diagBtn.x,diagBtn.y,diagBtn.w,diagBtn.h);
+        ctx.fillText("УДАРИТЬ ЧАРУ =)", diagBtn.x+25,diagBtn.y+28);
+    }
+}
+
+function gameLoop() { updateGameLogic(); drawGame(); requestAnimationFrame(gameLoop); }
+gameLoop();
+</script>
+</body>
+</html>
